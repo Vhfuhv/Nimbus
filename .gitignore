@@ -1,0 +1,9 @@
+.idea/
+out/
+*.iml
+
+**/target/
+
+# Local secrets (optional)
+**/application-local.yml
+.env

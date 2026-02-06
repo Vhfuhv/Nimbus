@@ -1,0 +1,37 @@
+server:
+  port: 14567
+
+spring:
+  application:
+    name: nimbus-mvp
+
+  # Spring AI - 阿里云 DashScope（OpenAI 兼容模式）
+  ai:
+    openai:
+      # 通过环境变量/启动参数注入：DASHSCOPE_API_KEY
+      # - 环境变量：DASHSCOPE_API_KEY=xxx
+      # - 启动参数：--DASHSCOPE_API_KEY=xxx 或 -DDASHSCOPE_API_KEY=xxx
+      api-key: ${DASHSCOPE_API_KEY:}
+      # 注意：不要在 base-url 里再写 /v1，否则会拼成 /v1/v1/chat/completions
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-turbo
+          temperature: 0.7
+
+# 和风天气 API 配置
+nimbus:
+  city:
+    csv-location: classpath:assets/China-City-List-latest.csv
+    hot: 北京,上海,广州,深圳,西安,南京,杭州,武汉,厦门,成都
+  weather:
+    # API Host (企业版自定义域名)
+    base-url: https://k93p42f57y.re.qweatherapi.com
+    # API Key（通过环境变量/启动参数注入：QWEATHER_API_KEY）
+    api-key: ${QWEATHER_API_KEY:}
+
+# 日志配置
+logging:
+  level:
+    com.nimbus: DEBUG
+    org.springframework.web.reactive: DEBUG
