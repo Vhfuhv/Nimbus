@@ -11,8 +11,7 @@ spring:
       # 通过环境变量/启动参数注入：DASHSCOPE_API_KEY
       # - 环境变量：DASHSCOPE_API_KEY=xxx
       # - 启动参数：--DASHSCOPE_API_KEY=xxx 或 -DDASHSCOPE_API_KEY=xxx
-#      api-key: ${DASHSCOPE_API_KEY:}
-      api-key: sk-4a529bebfc8f4d13b6518704275f0de4
+     api-key: ${DASHSCOPE_API_KEY:}
       # 注意：不要在 base-url 里再写 /v1，否则会拼成 /v1/v1/chat/completions
       base-url: https://dashscope.aliyuncs.com/compatible-mode
       chat:
@@ -29,8 +28,8 @@ nimbus:
     # API Host (企业版自定义域名)
     base-url: https://k93p42f57y.re.qweatherapi.com
     # API Key（通过环境变量/启动参数注入：QWEATHER_API_KEY）
-#    api-key: ${QWEATHER_API_KEY:}
-    api-key: bab8e13619894b3ca0aef80d764c25ed
+   api-key: ${QWEATHER_API_KEY:}
+
 
 # 日志配置
 logging:
