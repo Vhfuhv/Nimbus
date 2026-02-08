@@ -6,4 +6,5 @@ out/
 
 # Local secrets (optional)
 **/application-local.yml
+**/application.yml
 .env

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nimbus Web</title>
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --card: #ffffff;
+      --ink: #1f1f1f;
+      --muted: #6b6b6b;
+      --accent: #0b6efd;
+      --border: #e6e2d9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 10%, #fff 0%, #f6f4ef 60%);
+      color: var(--ink);
+      font: 16px/1.5 "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 24px auto 60px;
+      padding: 0 16px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    header h1 {
+      font-size: 22px;
+      margin: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.04);
+    }
+    .chat {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 380px;
+      max-height: 520px;
+      overflow: auto;
+      padding-right: 6px;
+    }
+    .bubble {
+      padding: 10px 12px;
+      border-radius: 12px;
+      max-width: 85%;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .user { align-self: flex-end; background: #e8f0ff; }
+    .assistant { align-self: flex-start; background: #fff6e8; }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      align-items: center;
+    }
+    textarea, input, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      font: inherit;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .primary { background: var(--accent); color: #fff; }
+    .ghost { background: #f1f1f1; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .kv { display: grid; grid-template-columns: 80px 1fr; gap: 8px; font-size: 14px; }
+    details summary { cursor: pointer; color: var(--accent); }
+    .trace-item {
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Nimbus 前端测试页</h1>
+      <span class="muted">支持 wrapper / agent</span>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="controls">
+          <label style="flex:1;">
+            接口模式
+            <select id="mode">
+              <option value="agent">Agent Chat</option>
+              <option value="wrapper">Wrapper Chat</option>
+            </select>
+          </label>
+          <label style="flex:1;">
+            城市（仅 wrapper 可选）
+            <input id="city" placeholder="北京/上海..." />
+          </label>
+        </div>
+
+        <div class="chat" id="chat"></div>
+        <textarea id="message" placeholder="输入问题，例如：北京今天穿什么？"></textarea>
+        <div class="controls">
+          <button class="primary" id="sendBtn">发送</button>
+          <button class="ghost" id="resetBtn">重置会话</button>
+        </div>
+        <div class="muted">提示：回车+Ctrl/Cmd 发送</div>
+      </section>
+
+      <aside class="card">
+        <div class="kv">
+          <div>Session</div><div id="sessionId">-</div>
+          <div>TraceId</div><div id="traceId">-</div>
+        </div>
+        <div class="muted" style="margin-top:8px;">结构化数据</div>
+        <pre id="structured" class="muted" style="white-space: pre-wrap;"></pre>
+        <details style="margin-top:10px;">
+          <summary>toolTrace（仅 agent）</summary>
+          <div id="toolTrace"></div>
+        </details>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const chatEl = document.getElementById("chat");
+    const messageEl = document.getElementById("message");
+    const sendBtn = document.getElementById("sendBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const sessionIdEl = document.getElementById("sessionId");
+    const traceIdEl = document.getElementById("traceId");
+    const structuredEl = document.getElementById("structured");
+    const toolTraceEl = document.getElementById("toolTrace");
+    const modeEl = document.getElementById("mode");
+    const cityEl = document.getElementById("city");
+
+    let sessionId = localStorage.getItem("nimbus.sessionId") || "";
+    renderSession();
+
+    function appendBubble(text, role) {
+      const div = document.createElement("div");
+      div.className = "bubble " + role;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function renderSession() {
+      sessionIdEl.textContent = sessionId || "-";
+    }
+
+    function clearTrace() {
+      traceIdEl.textContent = "-";
+      structuredEl.textContent = "";
+      toolTraceEl.innerHTML = "";
+    }
+
+    async function send() {
+      const message = messageEl.value.trim();
+      if (!message) return;
+      appendBubble(message, "user");
+      messageEl.value = "";
+
+      const mode = modeEl.value;
+      const payload = { message };
+
+      let url = "/nimbus/agent/chat";
+      if (mode === "wrapper") {
+        url = "/nimbus/chat";
+        if (cityEl.value.trim()) payload.city = cityEl.value.trim();
+      } else {
+        if (sessionId) payload.sessionId = sessionId;
+      }
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+
+      if (mode === "agent") {
+        if (data.sessionId && data.sessionId !== sessionId) {
+          sessionId = data.sessionId;
+          localStorage.setItem("nimbus.sessionId", sessionId);
+          renderSession();
+        }
+        traceIdEl.textContent = data.traceId || "-";
+        toolTraceEl.innerHTML = "";
+        if (Array.isArray(data.toolTrace)) {
+          data.toolTrace.forEach(t => {
+            const item = document.createElement("div");
+            item.className = "trace-item";
+            item.innerHTML = `
+              <div><strong>${t.name || "-"}</strong> (${t.status || "-"})</div>
+              <div class="muted">durationMs: ${t.durationMs || 0}</div>
+              <div class="muted">input: ${t.inputSummary || ""}</div>
+              <div class="muted">output: ${t.outputSummary || ""}</div>
+              <div class="muted">error: ${t.error || ""}</div>
+            `;
+            toolTraceEl.appendChild(item);
+          });
+        }
+      } else {
+        clearTrace();
+      }
+
+      appendBubble(data.content || data.errorMessage || "无返回内容", "assistant");
+      structuredEl.textContent = JSON.stringify({
+        city: data.city,
+        weather: data.weather,
+        clothingAdvice: data.clothingAdvice
+      }, null, 2);
+    }
+
+    sendBtn.addEventListener("click", send);
+    messageEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        send();
+      }
+    });
+    resetBtn.addEventListener("click", () => {
+      sessionId = "";
+      localStorage.removeItem("nimbus.sessionId");
+      renderSession();
+      chatEl.innerHTML = "";
+      clearTrace();
+    });
+  </script>
+</body>
+</html>
