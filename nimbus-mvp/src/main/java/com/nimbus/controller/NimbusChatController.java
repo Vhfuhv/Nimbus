@@ -9,6 +9,7 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +25,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class NimbusChatController {
 
+    @Qualifier("chatClient")
     private final ChatClient chatClient;
     private final WeatherQueryService weatherQueryService;
     private final CityConfig cityConfig;
@@ -123,4 +125,3 @@ public class NimbusChatController {
         }
     }
 }
-

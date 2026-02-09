@@ -1,0 +1,29 @@
+server:
+  port: 14568
+
+spring:
+  application:
+    name: nimbus-agent
+
+  ai:
+    openai:
+      api-key: ${DASHSCOPE_API_KEY:}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-turbo
+          temperature: 0.7
+          tool-choice: auto
+
+nimbus:
+  city:
+    csv-location: file:../nimbus-mvp/assets/China-City-List-latest.csv
+    hot: 北京,上海,广州,深圳,西安,南京,杭州,武汉,厦门,成都
+  weather:
+    base-url: https://k93p42f57y.re.qweatherapi.com
+    api-key: ${QWEATHER_API_KEY:}
+
+logging:
+  level:
+    com.nimbus: INFO
+

@@ -21,7 +21,7 @@ import java.util.*;
 public class AgentService {
 
     // 最大步骤数，防止模型陷入死循环
-    private static final int MAX_STEPS = 3;
+    private static final int MAX_STEPS = 5;
 
     private final ChatClient agentChatClient;
     private final AgentSessionStore sessionStore;
@@ -93,8 +93,9 @@ public class AgentService {
             } catch (Exception e) {
                 trace.setStatus("error");
                 trace.setError(e.getMessage());
-                toolTraces.add(trace);
-                return AgentResult.error("Tool call failed: " + action.getName(), session.getSessionId(), traceId, toolTraces);
+                String safeError = StringUtils.hasText(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName();
+                sessionStore.append(session.getSessionId(), "tool",
+                        "[TOOL_ERROR " + action.getName() + "] " + safeError);
             } finally {
                 long end = Instant.now().toEpochMilli();
                 trace.setDurationMs(Math.max(0, end - trace.getStartTs()));
@@ -177,13 +178,17 @@ public class AgentService {
             city = cityConfig.findByName(cityName).orElse(null);
         }
         if (city == null && StringUtils.hasText(locationId)) {
-            city = findByLocationId(locationId);
+            city = cityConfig.findByLocationId(locationId).orElse(null);
         }
         if (city == null) {
             throw new IllegalArgumentException("City not found.");
         }
 
         WeatherResponse response = qWeatherClient.get7DayForecast(city.getLocationId());
+        if (response == null || !response.isSuccess()) {
+            String code = response != null ? response.getCode() : "null";
+            throw new IllegalStateException("Weather api failed: code=" + code);
+        }
         DailyWeather today = response != null ? response.getToday() : null;
         if (today == null) {
             throw new IllegalStateException("No weather data.");
@@ -196,18 +201,6 @@ public class AgentService {
         result.put("city", city);
         result.put("weather", today);
         return result;
-    }
-
-    private City findByLocationId(String locationId) {
-        if (!StringUtils.hasText(locationId)) {
-            return null;
-        }
-        for (City city : cityConfig.getAllCities()) {
-            if (locationId.equals(city.getLocationId())) {
-                return city;
-            }
-        }
-        return null;
     }
 
     private List<String> hotCityNames() {
@@ -235,12 +228,46 @@ public class AgentService {
     }
 
     private String extractJson(String text) {
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start < 0 || end < 0 || end <= start) {
+        if (!StringUtils.hasText(text)) {
             return null;
         }
-        return text.substring(start, end + 1);
+
+        int start = text.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+
+        return null;
     }
 
     private String buildPrompt(AgentSession session) {

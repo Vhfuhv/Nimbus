@@ -1,6 +1,6 @@
-package com.nimbus.config;
+package com.nimbus.agentai.config;
 
-import com.nimbus.model.City;
+import com.nimbus.agentai.model.City;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -16,9 +16,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/**
- * 城市配置 - 从 CSV 城市库加载（和风 LocationID）
- */
 @Slf4j
 @Component
 public class CityConfig implements ResourceLoaderAware {
@@ -36,7 +33,7 @@ public class CityConfig implements ResourceLoaderAware {
 
     private ResourceLoader resourceLoader = new DefaultResourceLoader();
 
-    private String csvLocation = "classpath:assets/China-City-List-latest.csv";
+    private String csvLocation = "file:../nimbus-mvp/assets/China-City-List-latest.csv";
 
     private List<String> hotCityNames = DEFAULT_HOT_CITIES;
 
@@ -47,7 +44,7 @@ public class CityConfig implements ResourceLoaderAware {
         }
     }
 
-    @Value("${nimbus.city.csv-location:classpath:assets/China-City-List-latest.csv}")
+    @Value("${nimbus.city.csv-location:file:../nimbus-mvp/assets/China-City-List-latest.csv}")
     public void setCsvLocation(String csvLocation) {
         if (csvLocation != null && !csvLocation.isBlank()) {
             this.csvLocation = csvLocation.trim();
@@ -80,25 +77,12 @@ public class CityConfig implements ResourceLoaderAware {
     private void loadFromCsv() {
         Resource resource = resourceLoader.getResource(csvLocation);
         if (!resource.exists()) {
-            Resource fallback = resourceLoader.getResource("file:./assets/China-City-List-latest.csv");
-            if (fallback.exists()) {
-                resource = fallback;
-            }
-        }
-        if (!resource.exists()) {
-            Resource fallback = resourceLoader.getResource("file:./nimbus-mvp/assets/China-City-List-latest.csv");
-            if (fallback.exists()) {
-                resource = fallback;
-            }
-        }
-
-        if (!resource.exists()) {
             throw new IllegalStateException("未找到城市库 CSV: " + csvLocation);
         }
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
-            String versionLine = reader.readLine(); // e.g. China-City-List v...
+            reader.readLine(); // version
             String headerLine = reader.readLine();
             if (headerLine == null) {
                 throw new IllegalStateException("城市库 CSV 为空: " + csvLocation);
@@ -138,10 +122,6 @@ public class CityConfig implements ResourceLoaderAware {
                         .build();
 
                 upsertPreferred(city);
-            }
-
-            if (versionLine != null && !versionLine.isBlank()) {
-                log.debug("城市库版本: {}", versionLine);
             }
         } catch (Exception e) {
             throw new IllegalStateException("加载城市库失败: " + csvLocation, e);
@@ -191,9 +171,6 @@ public class CityConfig implements ResourceLoaderAware {
         return name != null && adm2 != null && name.equals(adm2);
     }
 
-    /**
-     * 根据城市名称查找（支持去掉常见后缀）
-     */
     public Optional<City> findByName(String name) {
         String normalized = normalizeName(name);
         if (normalized == null || normalized.isEmpty()) {
@@ -210,9 +187,13 @@ public class CityConfig implements ResourceLoaderAware {
                 .findFirst();
     }
 
-    /**
-     * 从用户对话中提取城市（按最长匹配）
-     */
+    public Optional<City> findByLocationId(String locationId) {
+        if (locationId == null || locationId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(citiesByLocationId.get(locationId.trim()));
+    }
+
     public Optional<City> extractFromText(String text) {
         if (text == null || text.isBlank()) {
             return Optional.empty();
@@ -232,26 +213,12 @@ public class CityConfig implements ResourceLoaderAware {
         return Optional.empty();
     }
 
-    public Optional<City> findByLocationId(String locationId) {
-        if (locationId == null || locationId.isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(citiesByLocationId.get(locationId.trim()));
-    }
-
-    /**
-     * 获取“热门城市”列表（用于 UI/示例）
-     */
     public List<City> getHotCities() {
         List<City> result = new ArrayList<>();
         for (String name : hotCityNames) {
             findByName(name).ifPresent(result::add);
         }
         return result;
-    }
-
-    public List<City> getAllCities() {
-        return List.copyOf(cities.values());
     }
 
     private static String safeGet(String[] cols, int idx) {
@@ -285,3 +252,4 @@ public class CityConfig implements ResourceLoaderAware {
         return line.split(",", -1);
     }
 }
+
