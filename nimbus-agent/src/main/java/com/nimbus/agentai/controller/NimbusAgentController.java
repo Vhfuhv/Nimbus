@@ -9,6 +9,7 @@ import com.nimbus.agentai.model.DailyWeather;
 import com.nimbus.agentai.model.ForecastDayBrief;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.http.MediaType;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RestController
 @RequestMapping("/nimbus/agent")
 @RequiredArgsConstructor
+@Slf4j
 public class NimbusAgentController {
 
     private final ChatClient agentChatClientA;
@@ -247,7 +249,8 @@ public class NimbusAgentController {
     private static void sendEvent(SseEmitter emitter, String event, Object data) {
         try {
             emitter.send(SseEmitter.event().name(event).data(data));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("SSE send failed. event={}, error={}", event, e.getMessage());
         }
     }
 

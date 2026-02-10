@@ -14,6 +14,7 @@ spring:
 
       # 注意：不要在 base-url 里再写 /v1，否则会拼成 /v1/v1/chat/completions
       base-url: https://dashscope.aliyuncs.com/compatible-mode
+      api-key:
       chat:
         options:
           model: qwen-turbo
@@ -27,6 +28,7 @@ nimbus:
   weather:
     # API Host (企业版自定义域名)
     base-url: https://k93p42f57y.re.qweatherapi.com
+    api-key:
     # API Key（通过环境变量/启动参数注入：QWEATHER_API_KEY）
 
 
