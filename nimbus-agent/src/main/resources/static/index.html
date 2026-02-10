@@ -11,6 +11,7 @@
     .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
     .muted { color: #666; }
     .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-top: 12px; }
+    #reply { white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -26,6 +27,7 @@
   <textarea id="msg" placeholder="例如：北京今天穿什么？ 或：明天呢？"></textarea>
   <div class="row">
     <button id="send">发送</button>
+    <button id="stop" disabled>停止</button>
     <span class="muted">TraceId: <code id="tid">-</code></span>
   </div>
 
@@ -52,37 +54,125 @@
     const dataEl = document.getElementById("data");
     const traceEl = document.getElementById("trace");
     const sendBtn = document.getElementById("send");
+    const stopBtn = document.getElementById("stop");
     const resetBtn = document.getElementById("reset");
 
     let sessionId = localStorage.getItem("nimbus.agentA.sessionId") || "";
     renderSid();
+    let currentAbort = null;
 
     function renderSid() { sidEl.textContent = sessionId || "-"; }
 
-    async function send() {
+    async function sendStream() {
       const message = msgEl.value.trim();
       if (!message) return;
       const payload = { message };
       if (sessionId) payload.sessionId = sessionId;
 
-      const res = await fetch("/nimbus/agent/chat", {
+      replyEl.textContent = "";
+      dataEl.textContent = "{}";
+      traceEl.textContent = "[]";
+      tidEl.textContent = "-";
+
+      sendBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      currentAbort = new AbortController();
+
+      const res = await fetch("/nimbus/agent/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: currentAbort.signal,
       });
-      const data = await res.json();
 
-      sessionId = data.sessionId || sessionId;
-      localStorage.setItem("nimbus.agentA.sessionId", sessionId);
-      renderSid();
+      if (!res.ok || !res.body) {
+        replyEl.textContent = `请求失败: HTTP ${res.status}`;
+        sendBtn.disabled = false;
+        stopBtn.disabled = true;
+        return;
+      }
 
-      tidEl.textContent = data.traceId || "-";
-      replyEl.textContent = data.content || data.errorMessage || "";
-      dataEl.textContent = JSON.stringify({ city: data.city, weather: data.weather, clothingAdvice: data.clothingAdvice }, null, 2);
-      traceEl.textContent = JSON.stringify(data.toolTrace || [], null, 2);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      function handleEvent(evt, dataText) {
+        if (evt === "meta") {
+          try {
+            const meta = JSON.parse(dataText);
+            sessionId = meta.sessionId || sessionId;
+            localStorage.setItem("nimbus.agentA.sessionId", sessionId);
+            renderSid();
+            tidEl.textContent = meta.traceId || "-";
+          } catch (_) {}
+          return;
+        }
+        if (evt === "delta") {
+          replyEl.textContent += dataText;
+          return;
+        }
+        if (evt === "done") {
+          try {
+            const data = JSON.parse(dataText);
+            sessionId = data.sessionId || sessionId;
+            localStorage.setItem("nimbus.agentA.sessionId", sessionId);
+            renderSid();
+
+            tidEl.textContent = data.traceId || tidEl.textContent || "-";
+            replyEl.textContent = data.content || replyEl.textContent || "";
+            dataEl.textContent = JSON.stringify({ city: data.city, weather: data.weather, forecast: data.forecast, clothingAdvice: data.clothingAdvice }, null, 2);
+            traceEl.textContent = JSON.stringify(data.toolTrace || [], null, 2);
+          } catch (_) {}
+          return;
+        }
+        if (evt === "error") {
+          replyEl.textContent += `\n[error] ${dataText}`;
+        }
+      }
+
+      function parseSse() {
+        while (true) {
+          const idx = buffer.indexOf("\n\n");
+          if (idx < 0) return;
+          const raw = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          let eventName = "message";
+          let dataLines = [];
+          for (const line of raw.split("\n")) {
+            if (line.startsWith("event:")) {
+              eventName = line.slice("event:".length).trim();
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice("data:".length).trimStart());
+            }
+          }
+          handleEvent(eventName, dataLines.join("\n"));
+        }
+      }
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          parseSse();
+        }
+      } catch (e) {
+        if (e && e.name !== "AbortError") {
+          replyEl.textContent += `\n[error] ${e.message || e}`;
+        }
+      } finally {
+        sendBtn.disabled = false;
+        stopBtn.disabled = true;
+        currentAbort = null;
+      }
     }
 
-    sendBtn.addEventListener("click", send);
+    sendBtn.addEventListener("click", sendStream);
+    stopBtn.addEventListener("click", () => {
+      if (currentAbort) currentAbort.abort();
+    });
     resetBtn.addEventListener("click", () => {
       sessionId = "";
       localStorage.removeItem("nimbus.agentA.sessionId");
@@ -95,4 +185,3 @@
   </script>
 </body>
 </html>
-

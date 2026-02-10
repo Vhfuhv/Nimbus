@@ -7,12 +7,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.Set;
+
 @Slf4j
 @Component
 public class QWeatherClient {
 
     private final WebClient webClient;
     private final String apiKey;
+
+    private static final Set<Integer> SUPPORTED_FORECAST_DAYS = Set.of(3, 7, 10, 15, 30);
 
     public QWeatherClient(WebClient weatherWebClient,
                           @Value("${nimbus.weather.api-key}") String apiKey) {
@@ -21,10 +25,15 @@ public class QWeatherClient {
     }
 
     public WeatherResponse get7DayForecast(String locationId) {
+        return getForecast(locationId, 7);
+    }
+
+    public WeatherResponse getForecast(String locationId, int days) {
+        int normalizedDays = normalizeForecastDays(days);
         try {
             return webClient.get()
                     .uri(uriBuilder -> uriBuilder
-                            .path("/v7/weather/7d")
+                            .path("/v7/weather/" + normalizedDays + "d")
                             .queryParam("location", locationId)
                             .queryParam("key", apiKey)
                             .build())
@@ -40,5 +49,11 @@ public class QWeatherClient {
             throw new RuntimeException("查询天气失败", e);
         }
     }
-}
 
+    private static int normalizeForecastDays(int days) {
+        if (SUPPORTED_FORECAST_DAYS.contains(days)) {
+            return days;
+        }
+        return 7;
+    }
+}

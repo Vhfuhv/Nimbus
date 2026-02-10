@@ -8,15 +8,17 @@ import com.nimbus.agentai.client.QWeatherClient;
 import com.nimbus.agentai.model.City;
 import com.nimbus.agentai.model.ClothingAdvice;
 import com.nimbus.agentai.model.DailyWeather;
+import com.nimbus.agentai.model.ForecastDayBrief;
 import com.nimbus.agentai.model.WeatherResponse;
 import com.nimbus.agentai.service.ClothingAdviceService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.model.function.FunctionCallback;
-import org.springframework.ai.model.function.FunctionCallbackWrapper;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
@@ -32,18 +34,21 @@ public class AgentAiConfig {
     public static final String RUN_CONTEXT_KEY = "runContext";
     public static final String TRACE_ID_KEY = "traceId";
 
+    private static final List<Integer> SUPPORTED_FORECAST_DAYS = List.of(3, 7, 10, 15, 30);
+
     @Bean
     public ChatMemory chatMemory() {
-        return new InMemoryChatMemory();
+        return MessageWindowChatMemory.builder()
+                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .maxMessages(20)
+                .build();
     }
 
     @Bean(name = "agentChatClientA")
     public ChatClient agentChatClient(ChatClient.Builder builder,
                                       ChatMemory chatMemory,
-                                      List<FunctionCallback> agentTools) {
-        var memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory)
-                .withChatMemoryRetrieveSize(20)
-                .build();
+                                      List<ToolCallback> agentTools) {
+        var memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
 
         return builder
                 .defaultAdvisors(memoryAdvisor)
@@ -52,20 +57,21 @@ public class AgentAiConfig {
                         你可以调用工具获取真实数据，严禁编造天气或城市编码。
                         工具列表：
                         - extract_city: 从用户文本识别城市（返回 cityName/locationId 或候选）
-                        - get_weather_today: 获取城市今日天气（输入 cityName 或 locationId）
-                        - get_clothing_advice: 根据今日天气生成结构化穿搭建议
+                        - get_weather_today: 获取城市天气预报（支持 days=3/7/10/15/30，dayOffset=0 今天，1 明天...；返回 weather + forecast 列表）
+                        - get_clothing_advice: 根据指定日期天气生成结构化穿搭建议
                         规则：
                         1) 如果城市缺失，优先调用 extract_city；如果 extract_city.found=false，则先追问城市（可给 candidates 提示）；
-                        2) 拿到 cityName/locationId 后调用 get_weather_today；如果 get_weather_today.success=false，则解释原因并追问/建议更换城市或稍后重试；
-                        3) 拿到 weather 后调用 get_clothing_advice；
-                        4) 最终用中文、简洁、可执行的方式回复（包含：天气概况、最高/最低温、穿搭、是否带伞）。
+                        2) 用户问“未来3天/7天/10天/15天/30天”时，调用 get_weather_today 并设置对应 days；用户问“明天/后天”等，设置 dayOffset；
+                        3) 拿到 cityName/locationId 后调用 get_weather_today；如果 get_weather_today.success=false，则解释原因并追问/建议更换城市或稍后重试；
+                        4) 拿到 weather 后调用 get_clothing_advice；
+                        5) 最终用中文、简洁、可执行的方式回复（包含：天气概况、最高/最低温、穿搭、是否带伞；如果用户问未来N天则给出N天简表）。
                         """)
-                .defaultFunctions(agentTools.toArray(FunctionCallback[]::new))
+                .defaultToolCallbacks(agentTools.toArray(ToolCallback[]::new))
                 .build();
     }
 
     @Bean
-    public FunctionCallback extractCityTool(CityConfig cityConfig, ObjectMapper objectMapper) {
+    public ToolCallback extractCityTool(CityConfig cityConfig, ObjectMapper objectMapper) {
         BiFunction<ExtractCityInput, ToolContext, ExtractCityOutput> fn = (input, toolContext) -> {
             ToolTrace trace = traceStart(toolContext, "extract_city", objectMapper, input);
             try {
@@ -76,34 +82,35 @@ public class AgentAiConfig {
             } catch (Exception e) {
                 ExtractCityOutput output = ExtractCityOutput.error(safeMessage(e), hotCityNames(cityConfig));
                 traceError(trace, e);
-                traceSuccess(trace, objectMapper, output);
+                traceOutput(trace, objectMapper, output);
                 return output;
             } finally {
                 traceEnd(trace);
             }
         };
 
-        return FunctionCallbackWrapper.builder(fn)
-                .withName("extract_city")
-                .withDescription("从用户文本中识别城市，返回 cityName 与 locationId。")
-                .withInputType(ExtractCityInput.class)
-                .withObjectMapper(objectMapper)
+        ToolCallback raw = FunctionToolCallback.builder("extract_city", fn)
+                .description("从用户文本中识别城市，返回 cityName 与 locationId。")
+                .inputType(ExtractCityInput.class)
                 .build();
+        return new SafeToolCallback(raw);
     }
 
     @Bean
-    public FunctionCallback getWeatherTodayTool(CityConfig cityConfig,
+    public ToolCallback getWeatherTodayTool(CityConfig cityConfig,
                                                 QWeatherClient qWeatherClient,
                                                 ObjectMapper objectMapper) {
         BiFunction<GetWeatherTodayInput, ToolContext, WeatherToolOutput> fn = (input, toolContext) -> {
             ToolTrace trace = traceStart(toolContext, "get_weather_today", objectMapper, input);
             try {
-                WeatherToolOutput output = getWeatherToday(cityConfig, qWeatherClient, input);
+                GetWeatherTodayInput normalizedInput = normalizeWeatherInput(cityConfig, toolContext, input);
+                WeatherToolOutput output = getWeatherToday(cityConfig, qWeatherClient, normalizedInput);
 
                 AgentRunContext runContext = getOrCreateRunContext(toolContext);
                 if (output.success() && output.city() != null && output.weather() != null) {
                     runContext.setLastCity(output.city());
                     runContext.setLastWeather(output.weather());
+                    runContext.setLastForecast(output.forecast());
                 }
 
                 traceSuccess(trace, objectMapper, output);
@@ -111,24 +118,56 @@ public class AgentAiConfig {
             } catch (Exception e) {
                 WeatherToolOutput output = WeatherToolOutput.error(safeMessage(e));
                 traceError(trace, e);
-                traceSuccess(trace, objectMapper, output);
+                traceOutput(trace, objectMapper, output);
                 return output;
             } finally {
                 traceEnd(trace);
             }
         };
 
-        return FunctionCallbackWrapper.builder(fn)
-                .withName("get_weather_today")
-                .withDescription("获取指定城市的今日天气。输入 cityName 或 locationId。")
-                .withInputType(GetWeatherTodayInput.class)
-                .withObjectMapper(objectMapper)
+        ToolCallback raw = FunctionToolCallback.builder("get_weather_today", fn)
+                .description("获取城市天气预报。输入 cityName/locationId，可选 days(3/7/10/15/30) 与 dayOffset(0今天,1明天...).")
+                .inputType(GetWeatherTodayInput.class)
                 .build();
+        return new SafeToolCallback(raw);
+    }
+
+    private static GetWeatherTodayInput normalizeWeatherInput(CityConfig cityConfig, ToolContext toolContext, GetWeatherTodayInput input) {
+        if (input != null && (StringUtils.hasText(input.cityName()) || StringUtils.hasText(input.locationId()))) {
+            return input;
+        }
+
+        String text = null;
+        Map<String, Object> ctx = toolContext != null ? toolContext.getContext() : null;
+        if (ctx != null) {
+            Object userMessage = ctx.get("userMessage");
+            if (userMessage instanceof String s && StringUtils.hasText(s)) {
+                text = s;
+            }
+        }
+
+        if (!StringUtils.hasText(text)) {
+            return input;
+        }
+
+        Optional<City> fromText = cityConfig.extractFromText(text);
+        if (fromText.isPresent()) {
+            City city = fromText.get();
+            return new GetWeatherTodayInput(city.getName(), city.getLocationId(), input != null ? input.days() : null, input != null ? input.dayOffset() : null);
+        }
+
+        Optional<City> byName = cityConfig.findByName(text);
+        if (byName.isPresent()) {
+            City city = byName.get();
+            return new GetWeatherTodayInput(city.getName(), city.getLocationId(), input != null ? input.days() : null, input != null ? input.dayOffset() : null);
+        }
+
+        return input;
     }
 
     @Bean
-    public FunctionCallback getClothingAdviceTool(ClothingAdviceService clothingAdviceService,
-                                                  ObjectMapper objectMapper) {
+    public ToolCallback getClothingAdviceTool(ClothingAdviceService clothingAdviceService,
+                                              ObjectMapper objectMapper) {
         BiFunction<GetClothingAdviceInput, ToolContext, ClothingAdvice> fn = (input, toolContext) -> {
             ToolTrace trace = traceStart(toolContext, "get_clothing_advice", objectMapper, input);
             try {
@@ -146,19 +185,18 @@ public class AgentAiConfig {
                         .reminder(safeMessage(e))
                         .build();
                 traceError(trace, e);
-                traceSuccess(trace, objectMapper, advice);
+                traceOutput(trace, objectMapper, advice);
                 return advice;
             } finally {
                 traceEnd(trace);
             }
         };
 
-        return FunctionCallbackWrapper.builder(fn)
-                .withName("get_clothing_advice")
-                .withDescription("根据今日天气生成结构化穿搭建议。输入 dailyWeather。")
-                .withInputType(GetClothingAdviceInput.class)
-                .withObjectMapper(objectMapper)
+        ToolCallback raw = FunctionToolCallback.builder("get_clothing_advice", fn)
+                .description("根据指定日期的天气生成结构化穿搭建议。输入 dailyWeather。")
+                .inputType(GetClothingAdviceInput.class)
                 .build();
+        return new SafeToolCallback(raw);
     }
 
     private static ExtractCityOutput extractCity(CityConfig cityConfig, String text) {
@@ -186,6 +224,8 @@ public class AgentAiConfig {
                                                      GetWeatherTodayInput input) {
         String cityName = input != null ? input.cityName() : null;
         String locationId = input != null ? input.locationId() : null;
+        Integer daysInput = input != null ? input.days() : null;
+        Integer dayOffsetInput = input != null ? input.dayOffset() : null;
 
         City city = null;
         if (StringUtils.hasText(cityName)) {
@@ -199,8 +239,13 @@ public class AgentAiConfig {
         }
 
         WeatherResponse response;
+        int dayOffset = normalizeDayOffset(dayOffsetInput);
+        if (dayOffset > 29) {
+            return WeatherToolOutput.error("dayOffset too large (max 29 for 30-day forecast).");
+        }
+        int days = normalizeForecastDays(daysInput, dayOffset);
         try {
-            response = qWeatherClient.get7DayForecast(city.getLocationId());
+            response = qWeatherClient.getForecast(city.getLocationId(), days);
         } catch (Exception e) {
             return WeatherToolOutput.error("Weather api exception: " + safeMessage(e));
         }
@@ -208,11 +253,66 @@ public class AgentAiConfig {
             String code = response != null ? response.getCode() : "null";
             return WeatherToolOutput.error("Weather api failed: code=" + code);
         }
-        DailyWeather today = response.getToday();
-        if (today == null) {
+        DailyWeather targetDay = getDayByOffset(response, dayOffset);
+        if (targetDay == null) {
             return WeatherToolOutput.error("No weather data.");
         }
-        return WeatherToolOutput.success(city, today);
+        List<ForecastDayBrief> forecast = daysInput != null ? toForecastBrief(response.getDaily()) : Collections.emptyList();
+        return WeatherToolOutput.success(city, targetDay, forecast);
+    }
+
+    private static int normalizeDayOffset(Integer dayOffset) {
+        if (dayOffset == null) {
+            return 0;
+        }
+        return Math.max(0, dayOffset);
+    }
+
+    private static int normalizeForecastDays(Integer requestedDays, int dayOffset) {
+        int minRequired = Math.max(1, dayOffset + 1);
+
+        Integer normalizedRequested = requestedDays;
+        if (normalizedRequested == null) {
+            normalizedRequested = 0;
+        }
+        if (normalizedRequested < minRequired) {
+            normalizedRequested = minRequired;
+        }
+
+        for (Integer supported : SUPPORTED_FORECAST_DAYS) {
+            if (supported >= normalizedRequested) {
+                return supported;
+            }
+        }
+        return 30;
+    }
+
+    private static DailyWeather getDayByOffset(WeatherResponse response, int dayOffset) {
+        if (response == null) {
+            return null;
+        }
+        List<DailyWeather> daily = response.getDaily();
+        if (daily == null || daily.isEmpty()) {
+            return null;
+        }
+        if (dayOffset < 0 || dayOffset >= daily.size()) {
+            return null;
+        }
+        return daily.get(dayOffset);
+    }
+
+    private static List<ForecastDayBrief> toForecastBrief(List<DailyWeather> daily) {
+        if (daily == null || daily.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<ForecastDayBrief> brief = new ArrayList<>(daily.size());
+        for (DailyWeather d : daily) {
+            if (d == null) {
+                continue;
+            }
+            brief.add(new ForecastDayBrief(d.getFxDate(), d.getTextDay(), d.getTempMin(), d.getTempMax(), d.getPrecip()));
+        }
+        return brief;
     }
 
     private static List<String> hotCityNames(CityConfig cityConfig) {
@@ -261,6 +361,13 @@ public class AgentAiConfig {
             return;
         }
         trace.setStatus("success");
+        trace.setOutputSummary(safeJson(objectMapper, output, 300));
+    }
+
+    private static void traceOutput(ToolTrace trace, ObjectMapper objectMapper, Object output) {
+        if (trace == null) {
+            return;
+        }
         trace.setOutputSummary(safeJson(objectMapper, output, 300));
     }
 
@@ -326,15 +433,23 @@ public class AgentAiConfig {
         }
     }
 
-    public record GetWeatherTodayInput(String cityName, String locationId) {}
+    public record GetWeatherTodayInput(String cityName, String locationId, Integer days, Integer dayOffset) {}
 
-    public record WeatherToolOutput(boolean success, City city, DailyWeather weather, String errorMessage) {
+    public record WeatherToolOutput(boolean success,
+                                    City city,
+                                    DailyWeather weather,
+                                    List<ForecastDayBrief> forecast,
+                                    String errorMessage) {
         public static WeatherToolOutput success(City city, DailyWeather weather) {
-            return new WeatherToolOutput(true, city, weather, null);
+            return new WeatherToolOutput(true, city, weather, Collections.emptyList(), null);
+        }
+
+        public static WeatherToolOutput success(City city, DailyWeather weather, List<ForecastDayBrief> forecast) {
+            return new WeatherToolOutput(true, city, weather, forecast != null ? forecast : Collections.emptyList(), null);
         }
 
         public static WeatherToolOutput error(String errorMessage) {
-            return new WeatherToolOutput(false, null, null, errorMessage);
+            return new WeatherToolOutput(false, null, null, Collections.emptyList(), errorMessage);
         }
     }
 

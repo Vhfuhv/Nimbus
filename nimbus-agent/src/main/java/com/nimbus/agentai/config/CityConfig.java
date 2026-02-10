@@ -33,7 +33,7 @@ public class CityConfig implements ResourceLoaderAware {
 
     private ResourceLoader resourceLoader = new DefaultResourceLoader();
 
-    private String csvLocation = "file:../nimbus-mvp/assets/China-City-List-latest.csv";
+    private String csvLocation = "classpath:assets/China-City-List-latest.csv";
 
     private List<String> hotCityNames = DEFAULT_HOT_CITIES;
 
@@ -44,7 +44,7 @@ public class CityConfig implements ResourceLoaderAware {
         }
     }
 
-    @Value("${nimbus.city.csv-location:file:../nimbus-mvp/assets/China-City-List-latest.csv}")
+    @Value("${nimbus.city.csv-location:classpath:assets/China-City-List-latest.csv}")
     public void setCsvLocation(String csvLocation) {
         if (csvLocation != null && !csvLocation.isBlank()) {
             this.csvLocation = csvLocation.trim();
@@ -76,6 +76,22 @@ public class CityConfig implements ResourceLoaderAware {
 
     private void loadFromCsv() {
         Resource resource = resourceLoader.getResource(csvLocation);
+        if (!resource.exists()) {
+            List<String> fallbacks = List.of(
+                    "file:./assets/China-City-List-latest.csv",
+                    "file:./nimbus-agent/assets/China-City-List-latest.csv",
+                    "file:../nimbus-agent/assets/China-City-List-latest.csv",
+                    "file:../nimbus-mvp/assets/China-City-List-latest.csv"
+            );
+            for (String fallback : fallbacks) {
+                Resource candidate = resourceLoader.getResource(fallback);
+                if (candidate.exists()) {
+                    resource = candidate;
+                    break;
+                }
+            }
+        }
+
         if (!resource.exists()) {
             throw new IllegalStateException("未找到城市库 CSV: " + csvLocation);
         }
@@ -252,4 +268,3 @@ public class CityConfig implements ResourceLoaderAware {
         return line.split(",", -1);
     }
 }
-
