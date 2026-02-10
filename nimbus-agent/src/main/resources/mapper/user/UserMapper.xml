@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nimbus.agentai.user.mapper.UserMapper">
+
+    <resultMap id="UserEntityMap" type="com.nimbus.agentai.user.model.UserEntity">
+        <id property="id" column="id"/>
+        <result property="userKey" column="user_key"/>
+        <result property="displayName" column="display_name"/>
+        <result property="status" column="status"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="findByUserKey" resultMap="UserEntityMap">
+        SELECT id, user_key, display_name, status, created_at, updated_at
+        FROM users
+        WHERE user_key = #{userKey}
+        LIMIT 1
+    </select>
+
+    <insert id="insert" parameterType="com.nimbus.agentai.user.model.UserEntity" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO users (user_key, display_name, status)
+        VALUES (#{userKey}, #{displayName}, #{status})
+    </insert>
+
+</mapper>
+

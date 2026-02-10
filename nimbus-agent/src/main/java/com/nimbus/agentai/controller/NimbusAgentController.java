@@ -7,6 +7,7 @@ import com.nimbus.agentai.model.City;
 import com.nimbus.agentai.model.ClothingAdvice;
 import com.nimbus.agentai.model.DailyWeather;
 import com.nimbus.agentai.model.ForecastDayBrief;
+import com.nimbus.agentai.user.service.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,9 +32,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class NimbusAgentController {
 
     private final ChatClient agentChatClientA;
+    private final UserService userService;
 
     @PostMapping("/chat")
-    public ResponseEntity<AgentChatResponse> chat(@RequestBody AgentChatRequest request) {
+    public ResponseEntity<AgentChatResponse> chat(@RequestBody AgentChatRequest request,
+                                                  @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
         if (request == null || !StringUtils.hasText(request.getMessage())) {
             return ResponseEntity.badRequest().body(AgentChatResponse.error("message is required"));
         }
@@ -41,12 +44,15 @@ public class NimbusAgentController {
         String sessionId = StringUtils.hasText(request.getSessionId())
                 ? request.getSessionId().trim()
                 : UUID.randomUUID().toString();
+        String userId = resolveUserId(request, sessionId, headerUserId);
+        String conversationId = buildConversationId(userId, sessionId);
         String traceId = UUID.randomUUID().toString();
+        ensureSession(userId, sessionId, conversationId);
 
         List<ToolTrace> toolTraces = new ArrayList<>();
         AgentRunContext runContext = new AgentRunContext();
 
-        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request);
+        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request, userId);
 
         AgentChatResponse response = new AgentChatResponse();
         response.setSessionId(sessionId);
@@ -55,7 +61,7 @@ public class NimbusAgentController {
 
         try {
             String content = agentChatClientA.prompt()
-                    .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, sessionId))
+                    .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, conversationId))
                     .toolContext(toolContext)
                     .user(request.getMessage())
                     .call()
@@ -67,6 +73,7 @@ public class NimbusAgentController {
             response.setWeather(runContext.getLastWeather());
             response.setForecast(runContext.getLastForecast());
             response.setClothingAdvice(runContext.getLastAdvice());
+            touchSession(userId, sessionId);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             response.setSuccess(false);
@@ -75,12 +82,14 @@ public class NimbusAgentController {
             response.setWeather(runContext.getLastWeather());
             response.setForecast(runContext.getLastForecast());
             response.setClothingAdvice(runContext.getLastAdvice());
+            touchSession(userId, sessionId);
             return ResponseEntity.badRequest().body(response);
         }
     }
 
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chatStream(@RequestBody AgentChatRequest request) {
+    public SseEmitter chatStream(@RequestBody AgentChatRequest request,
+                                 @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
 
         if (request == null || !StringUtils.hasText(request.getMessage())) {
@@ -92,12 +101,15 @@ public class NimbusAgentController {
         String sessionId = StringUtils.hasText(request.getSessionId())
                 ? request.getSessionId().trim()
                 : UUID.randomUUID().toString();
+        String userId = resolveUserId(request, sessionId, headerUserId);
+        String conversationId = buildConversationId(userId, sessionId);
         String traceId = UUID.randomUUID().toString();
+        ensureSession(userId, sessionId, conversationId);
 
         List<ToolTrace> toolTraces = new ArrayList<>();
         AgentRunContext runContext = new AgentRunContext();
 
-        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request);
+        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request, userId);
 
         sendEvent(emitter, "meta", Map.of("sessionId", sessionId, "traceId", traceId));
 
@@ -105,7 +117,7 @@ public class NimbusAgentController {
         StringBuilder contentBuilder = new StringBuilder(512);
 
         Flux<String> flux = agentChatClientA.prompt()
-                .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, sessionId))
+                .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, conversationId))
                 .toolContext(toolContext)
                 .user(request.getMessage())
                 .stream()
@@ -137,6 +149,7 @@ public class NimbusAgentController {
                         response.setWeather(runContext.getLastWeather());
                         response.setForecast(runContext.getLastForecast());
                         response.setClothingAdvice(runContext.getLastAdvice());
+                        touchSession(userId, sessionId);
                         sendEvent(emitter, "done", response);
                         emitter.complete();
                     }
@@ -160,7 +173,8 @@ public class NimbusAgentController {
     }
 
     @PostMapping(value = "/chat/stream/stable", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chatStreamStable(@RequestBody AgentChatRequest request) {
+    public SseEmitter chatStreamStable(@RequestBody AgentChatRequest request,
+                                       @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
 
         if (request == null || !StringUtils.hasText(request.getMessage())) {
@@ -172,12 +186,15 @@ public class NimbusAgentController {
         String sessionId = StringUtils.hasText(request.getSessionId())
                 ? request.getSessionId().trim()
                 : UUID.randomUUID().toString();
+        String userId = resolveUserId(request, sessionId, headerUserId);
+        String conversationId = buildConversationId(userId, sessionId);
         String traceId = UUID.randomUUID().toString();
+        ensureSession(userId, sessionId, conversationId);
 
         List<ToolTrace> toolTraces = new ArrayList<>();
         AgentRunContext runContext = new AgentRunContext();
 
-        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request);
+        Map<String, Object> toolContext = buildToolContext(traceId, toolTraces, runContext, request, userId);
 
         sendEvent(emitter, "meta", Map.of("sessionId", sessionId, "traceId", traceId));
 
@@ -186,7 +203,7 @@ public class NimbusAgentController {
         CompletableFuture.runAsync(() -> {
             try {
                 String content = agentChatClientA.prompt()
-                        .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, sessionId))
+                        .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, conversationId))
                         .toolContext(toolContext)
                         .user(request.getMessage())
                         .call()
@@ -209,6 +226,7 @@ public class NimbusAgentController {
                     response.setWeather(runContext.getLastWeather());
                     response.setForecast(runContext.getLastForecast());
                     response.setClothingAdvice(runContext.getLastAdvice());
+                    touchSession(userId, sessionId);
                     sendEvent(emitter, "done", response);
                     emitter.complete();
                 }
@@ -234,16 +252,72 @@ public class NimbusAgentController {
     private static Map<String, Object> buildToolContext(String traceId,
                                                         List<ToolTrace> toolTraces,
                                                         AgentRunContext runContext,
-                                                        AgentChatRequest request) {
+                                                        AgentChatRequest request,
+                                                        String userId) {
         Map<String, Object> toolContext = new HashMap<>();
         toolContext.put(AgentAiConfig.TRACE_ID_KEY, traceId);
         toolContext.put(AgentAiConfig.TOOL_TRACE_KEY, toolTraces);
         toolContext.put(AgentAiConfig.RUN_CONTEXT_KEY, runContext);
         toolContext.put("userMessage", request.getMessage());
-
-        String userId = StringUtils.hasText(request.getUserId()) ? request.getUserId().trim() : "demo-user";
         toolContext.put("userId", userId);
         return toolContext;
+    }
+
+    private static String resolveUserId(AgentChatRequest request, String sessionId, String headerUserId) {
+        if (StringUtils.hasText(headerUserId)) {
+            return headerUserId.trim();
+        }
+        if (request != null && StringUtils.hasText(request.getUserId())) {
+            return request.getUserId().trim();
+        }
+        return "guest-" + sessionId;
+    }
+
+    private static String buildConversationId(String userId, String sessionId) {
+        return userId + ":" + sessionId;
+    }
+
+    @GetMapping("/users/{userKey}")
+    public ResponseEntity<UserInspectResponse> getUser(@PathVariable String userKey) {
+        return userService.findByUserKey(userKey)
+                .map(user -> {
+                    UserInspectResponse response = new UserInspectResponse();
+                    response.setSuccess(true);
+                    response.setUser(user);
+                    response.setSessionCount(userService.listSessionsByUserKey(userKey).size());
+                    return ResponseEntity.ok(response);
+                })
+                .orElseGet(() -> {
+                    UserInspectResponse response = new UserInspectResponse();
+                    response.setSuccess(false);
+                    response.setErrorMessage("user not found");
+                    return ResponseEntity.status(404).body(response);
+                });
+    }
+
+    @GetMapping("/users/{userKey}/sessions")
+    public ResponseEntity<UserSessionsResponse> getUserSessions(@PathVariable String userKey) {
+        UserSessionsResponse response = new UserSessionsResponse();
+        response.setSuccess(true);
+        response.setUserKey(userKey);
+        response.setSessions(userService.listSessionsByUserKey(userKey));
+        return ResponseEntity.ok(response);
+    }
+
+    private void ensureSession(String userId, String sessionId, String memoryKey) {
+        try {
+            userService.getOrCreateSession(userId, sessionId, memoryKey);
+        } catch (Exception e) {
+            log.warn("Persist session failed. userId={}, sessionId={}, error={}", userId, sessionId, e.getMessage());
+        }
+    }
+
+    private void touchSession(String userId, String sessionId) {
+        try {
+            userService.touchSession(userId, sessionId);
+        } catch (Exception e) {
+            log.warn("Touch session failed. userId={}, sessionId={}, error={}", userId, sessionId, e.getMessage());
+        }
     }
 
     private static void sendEvent(SseEmitter emitter, String event, Object data) {
@@ -297,5 +371,20 @@ public class NimbusAgentController {
             response.setErrorMessage(message);
             return response;
         }
+    }
+
+    @Data
+    public static class UserInspectResponse {
+        private boolean success;
+        private com.nimbus.agentai.user.model.UserEntity user;
+        private int sessionCount;
+        private String errorMessage;
+    }
+
+    @Data
+    public static class UserSessionsResponse {
+        private boolean success;
+        private String userKey;
+        private List<com.nimbus.agentai.user.model.ChatSessionEntity> sessions;
     }
 }

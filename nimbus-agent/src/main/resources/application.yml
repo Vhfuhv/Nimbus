@@ -5,11 +5,23 @@ spring:
   application:
     name: nimbus-agent
 
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/nimbus?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false
+    username: root
+    password: root
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
   # Spring AI Alibaba - DashScope（通义千问原生接口）
   ai:
     dashscope:
       # 也支持环境变量：AI_DASHSCOPE_API_KEY
-      api-key:
+      api-key: sk-74917d35cd5f44b49be605e74903a9fb
       base-url: https://dashscope.aliyuncs.com
       chat:
         options:
@@ -25,10 +37,16 @@ nimbus:
     # API Host (企业版自定义域名)
     base-url: https://k93p42f57y.re.qweatherapi.com
     # API Key（通过环境变量/启动参数注入：QWEATHER_API_KEY）
-    api-key:
+    api-key: 4a2d9dcdac6242aa926350d143393757
 
 # 日志配置
 logging:
   level:
     com.nimbus: DEBUG
     org.springframework.web.reactive: DEBUG
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.nimbus.agentai.user.model
+  configuration:
+    map-underscore-to-camel-case: true

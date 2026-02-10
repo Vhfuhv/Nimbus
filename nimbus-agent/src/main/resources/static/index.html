@@ -19,6 +19,11 @@
   <div class="muted">Spring AI 原生 tool-calling + chat memory</div>
 
   <div class="row">
+    <div>UserId:</div>
+    <input id="uid" placeholder="例如：u001" style="min-width: 220px;" />
+  </div>
+
+  <div class="row">
     <div>SessionId:</div>
     <code id="sid">-</code>
     <button id="reset">重置会话</button>
@@ -46,19 +51,37 @@
     <pre id="trace">[]</pre>
   </div>
 
+  <div class="card">
+    <h4>用户调试</h4>
+    <div class="row">
+      <button id="loadUser">查询用户</button>
+      <button id="loadSessions">查询会话</button>
+    </div>
+    <div class="muted">当前按输入框中的 UserId 查询。</div>
+    <pre id="userInfo">{}</pre>
+    <pre id="sessionInfo">[]</pre>
+  </div>
+
   <script>
     const sidEl = document.getElementById("sid");
     const tidEl = document.getElementById("tid");
+    const uidEl = document.getElementById("uid");
     const msgEl = document.getElementById("msg");
     const replyEl = document.getElementById("reply");
     const dataEl = document.getElementById("data");
     const traceEl = document.getElementById("trace");
+    const userInfoEl = document.getElementById("userInfo");
+    const sessionInfoEl = document.getElementById("sessionInfo");
     const sendBtn = document.getElementById("send");
     const stopBtn = document.getElementById("stop");
     const resetBtn = document.getElementById("reset");
+    const loadUserBtn = document.getElementById("loadUser");
+    const loadSessionsBtn = document.getElementById("loadSessions");
 
     let sessionId = localStorage.getItem("nimbus.agentA.sessionId") || "";
+    let userId = localStorage.getItem("nimbus.agentA.userId") || "";
     renderSid();
+    uidEl.value = userId;
     let currentAbort = null;
 
     function renderSid() { sidEl.textContent = sessionId || "-"; }
@@ -68,6 +91,12 @@
       if (!message) return;
       const payload = { message };
       if (sessionId) payload.sessionId = sessionId;
+      userId = (uidEl.value || "").trim();
+      if (userId) {
+        localStorage.setItem("nimbus.agentA.userId", userId);
+      } else {
+        localStorage.removeItem("nimbus.agentA.userId");
+      }
 
       replyEl.textContent = "";
       dataEl.textContent = "{}";
@@ -81,7 +110,10 @@
 
       const res = await fetch("/nimbus/agent/chat/stream", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(userId ? { "X-User-Id": userId } : {}),
+        },
         body: JSON.stringify(payload),
         signal: currentAbort.signal,
       });
@@ -169,7 +201,39 @@
       }
     }
 
+    async function loadUser() {
+      const userKey = (uidEl.value || "").trim();
+      if (!userKey) {
+        userInfoEl.textContent = JSON.stringify({ success: false, error: "请先输入 UserId" }, null, 2);
+        return;
+      }
+      const res = await fetch(`/nimbus/agent/users/${encodeURIComponent(userKey)}`);
+      const text = await res.text();
+      try {
+        userInfoEl.textContent = JSON.stringify(JSON.parse(text), null, 2);
+      } catch (_) {
+        userInfoEl.textContent = text;
+      }
+    }
+
+    async function loadSessions() {
+      const userKey = (uidEl.value || "").trim();
+      if (!userKey) {
+        sessionInfoEl.textContent = JSON.stringify({ success: false, error: "请先输入 UserId" }, null, 2);
+        return;
+      }
+      const res = await fetch(`/nimbus/agent/users/${encodeURIComponent(userKey)}/sessions`);
+      const text = await res.text();
+      try {
+        sessionInfoEl.textContent = JSON.stringify(JSON.parse(text), null, 2);
+      } catch (_) {
+        sessionInfoEl.textContent = text;
+      }
+    }
+
     sendBtn.addEventListener("click", sendStream);
+    loadUserBtn.addEventListener("click", loadUser);
+    loadSessionsBtn.addEventListener("click", loadSessions);
     stopBtn.addEventListener("click", () => {
       if (currentAbort) currentAbort.abort();
     });
